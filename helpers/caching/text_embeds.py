@@ -381,7 +381,6 @@ class TextEmbeddingCache:
     ):
         prompt_embeds_list = []
 
-        pooled_prompt_embeds = None 
         emitted_warning = False
         try:
             # Split the prompt by commas and shuffle the parts
@@ -391,103 +390,77 @@ class TextEmbeddingCache:
                 prompt = ','.join(prompt_parts).strip()
             for tokenizer, text_encoder in zip(tokenizers, text_encoders):
                 if tokenizer is None or text_encoder is None:
+                    # SDXL Refiner only has one text encoder and tokenizer
                     continue
-                if not isinstance(prompt, (str, list)):
+                if type(prompt) is not str and type(prompt) is not list:
                     prompt = str(prompt)
                 max_seq_len = 256 if self.model_type == "kolors" else 77
-                # First, tokenize without truncation to check the total number of tokens
+                text_inputs = tokenizer(
+                    prompt,
+                    padding="max_length",
+                    truncation=True,
+                    return_tensors="pt",
+                    max_length=max_seq_len,
+                )
                 untruncated_ids = tokenizer(
                     prompt,
-                    padding=False,
-                    truncation=False,
-                    return_tensors="pt",                
+                    padding="longest",
+                    return_tensors="pt",
+                    max_length=max_seq_len,
                 ).input_ids
 
-                total_tokens = untruncated_ids.shape[-1]
-                # Handle cases where the prompt exceeds the token limit
-                if total_tokens > max_seq_len:
-                    print(f"Prompt exceeds {max_seq_len} tokens. Total tokens: {total_tokens}. Splitting into chunks.")
-                    # Directly split the tokenized input (untruncated_ids) into chunks
-                    prompt_chunks = torch.split(untruncated_ids, max_seq_len, dim=-1)
-                    chunk_embeds = []
-                    # Process each chunk separately
-                    for chunk in prompt_chunks:
-                        
-                        # Directly use the chunk without decoding and re-tokenizing
-                        chunk_inputs = {
-                            "input_ids": chunk.to(self.accelerator.device),
-                            "attention_mask": torch.ones_like(chunk, device=self.accelerator.device)  # assuming attention mask is 1s
-                        }
-                        # Encode the chunk
-                        if self.model_type == "sdxl":
-                            prompt_embeds_output = text_encoder(
-                                chunk_inputs["input_ids"],
-                                output_hidden_states=True,
-                            )
-                            pooled_prompt_embeds = prompt_embeds_output[0]
-                            prompt_embeds = prompt_embeds_output.hidden_states[-2]
-                        elif self.model_type == "kolors":
-                            prompt_embeds_output = text_encoder(
-                                input_ids=chunk_inputs["input_ids"],
-                                attention_mask=chunk_inputs["attention_mask"],
-                                position_ids=torch.arange(chunk.shape[1], device=self.accelerator.device).unsqueeze(0),  # generate position_ids if necessary
-                                output_hidden_states=True,
-                            )
-                            prompt_embeds = prompt_embeds_output.hidden_states[-2].permute(1, 0, 2).clone()
-                            pooled_prompt_embeds = prompt_embeds_output.hidden_states[-1][-1, :, :].clone()
-                        else:
-                            raise ValueError(f"Unknown model type: {self.model_type}")
-
-                        
-                        # Add chunk embeddings to the list
-                        chunk_embeds.append(prompt_embeds)
-
-                    # Concatenate all chunk embeddings if available
-                    if len(chunk_embeds) > 0:
-                        prompt_embeds = torch.cat(chunk_embeds, dim=1)
-                        print(f"Final concatenated embeddings shape: {prompt_embeds.shape}")  # Debugging output for final shape
-                    else:
-                        raise ValueError("No valid chunk embeddings were found, check the tokenization or chunking process.")
-
-                else:
-                    # If the prompt is within token limit, process normally
-                    text_inputs = tokenizer(
-                        prompt,
-                        padding="max_length",
-                        truncation=True,
-                        return_tensors="pt",
-                        max_length=max_seq_len,
+                if untruncated_ids.shape[
+                    -1
+                ] > tokenizer.model_max_length and not torch.equal(
+                    text_inputs.input_ids, untruncated_ids
+                ):
+                    removed_text = tokenizer.batch_decode(
+                        untruncated_ids[:, tokenizer.model_max_length - 1 : -1]
                     )
-                    
-                    if self.model_type == "sdxl":
-                        prompt_embeds_output = text_encoder(
-                            text_inputs.input_ids.to(self.accelerator.device),
-                            output_hidden_states=True,
+                    if not emitted_warning:
+                        # Only print this once. It's a bit spammy otherwise.
+                        emitted_warning = True
+                        logger.warning(
+                            f"The following part of your input was truncated because CLIP can only handle sequences up to {tokenizer.model_max_length} tokens: {removed_text}"
                         )
-                        pooled_prompt_embeds = prompt_embeds_output[0]
-                        prompt_embeds = prompt_embeds_output.hidden_states[-2]
-                    elif self.model_type == "kolors":
-                        prompt_embeds_output = text_encoder(
-                            input_ids=text_inputs["input_ids"].to(self.accelerator.device),
-                            attention_mask=text_inputs["attention_mask"].to(self.accelerator.device),
-                            position_ids=text_inputs["position_ids"],
-                            output_hidden_states=True,
-                        )
-                        prompt_embeds = prompt_embeds_output.hidden_states[-2].permute(1, 0, 2).clone()
-                        pooled_prompt_embeds = prompt_embeds_output.hidden_states[-1][-1, :, :].clone()
-                    else:
-                        raise ValueError(f"Unknown model type: {self.model_type}")
+                if self.model_type == "sdxl":
+                    prompt_embeds_output = text_encoder(
+                        text_inputs.input_ids.to(self.accelerator.device),
+                        output_hidden_states=True,
+                    )
+                    # We are always interested in the pooled output of the final text encoder
+                    pooled_prompt_embeds = prompt_embeds_output[0]
+                    prompt_embeds = prompt_embeds_output.hidden_states[-2]
+                elif self.model_type == "kolors":
+                    # we pass the attention mask into the text encoder. it transforms the embeds but does not attend to them.
+                    # unfortunately, kolors does not return the attention mask for later use by the U-net to avoid attending to the padding tokens.
+                    prompt_embeds_output = text_encoder(
+                        input_ids=text_inputs["input_ids"].to(self.accelerator.device),
+                        attention_mask=text_inputs["attention_mask"].to(
+                            self.accelerator.device
+                        ),
+                        position_ids=text_inputs["position_ids"],
+                        output_hidden_states=True,
+                    )
+                    # the ChatGLM encoder output is hereby mangled in fancy ways for Kolors to be useful.
+                    prompt_embeds = (
+                        prompt_embeds_output.hidden_states[-2].permute(1, 0, 2).clone()
+                    )
+                    # [max_sequence_length, batch, hidden_size] -> [batch, hidden_size]
+                    pooled_prompt_embeds = prompt_embeds_output.hidden_states[-1][
+                        -1, :, :
+                    ].clone()
+                else:
+                    raise ValueError(f"Unknown model type: {self.model_type}")
+                bs_embed, seq_len, _ = prompt_embeds.shape
+                prompt_embeds = prompt_embeds.view(bs_embed, seq_len, -1)
 
-                    bs_embed, seq_len, _ = prompt_embeds.shape
-                    prompt_embeds = prompt_embeds.view(bs_embed, seq_len, -1)
+                # Clear out anything we moved to the text encoder device
+                text_inputs.input_ids.to("cpu")
+                del prompt_embeds_output
+                del text_inputs
 
-                    # Clear out anything moved to the text encoder device
-                    text_inputs.input_ids.to("cpu")
-                    del prompt_embeds_output
-                    del text_inputs
-
-                    prompt_embeds_list.append(prompt_embeds)
-                    
+                prompt_embeds_list.append(prompt_embeds)
         except Exception as e:
             import traceback
 
@@ -496,7 +469,6 @@ class TextEmbeddingCache:
             )
             raise e
 
-                # Concatenate all embeddings across text encoders
         prompt_embeds = torch.cat(prompt_embeds_list, dim=-1)
         return prompt_embeds, pooled_prompt_embeds
 
