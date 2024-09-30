@@ -381,6 +381,7 @@ class TextEmbeddingCache:
     ):
         prompt_embeds_list = []
 
+        pooled_prompt_embeds = None 
         emitted_warning = False
         try:
             # Split the prompt by commas and shuffle the parts
@@ -391,29 +392,28 @@ class TextEmbeddingCache:
             for tokenizer, text_encoder in zip(tokenizers, text_encoders):
                 if tokenizer is None or text_encoder is None:
                     continue
-                if type(prompt) is not str and type(prompt) is not list:
+                if not isinstance(prompt, (str, list)):
                     prompt = str(prompt)
                 max_seq_len = 256 if self.model_type == "kolors" else 77
                 # First, tokenize without truncation to check the total number of tokens
                 untruncated_ids = tokenizer(
                     prompt,
-                    padding="longest",
-                    return_tensors="pt",
-                    max_length=None,  # No truncation
+                    padding=False,
+                    truncation=False,
+                    return_tensors="pt",                
                 ).input_ids
 
                 total_tokens = untruncated_ids.shape[-1]
                 # Handle cases where the prompt exceeds the token limit
-                if total_tokens > tokenizer.model_max_length:
-                    ### MODIFICATION START: Handle long prompts by splitting into chunks
-                    # Split the prompt into chunks of size `max_seq_len`
-                    print(f"Caption exceeds {tokenizer.model_max_length} tokens. Total tokens: {total_tokens}. Splitting into chunks.")
-                    prompt_chunks = [prompt[i:i+max_seq_len] for i in range(0, len(prompt), max_seq_len)]
+                if total_tokens > max_seq_len:
+                    print(f"Prompt exceeds {max_seq_len} tokens. Total tokens: {total_tokens}. Splitting into chunks.")
+                    # Split tokenized input into chunks of size `max_seq_len`
+                    prompt_chunks = torch.split(untruncated_ids, max_seq_len, dim=-1)
                     chunk_embeds = []
                     # Process each chunk separately
                     for chunk in prompt_chunks:
                         chunk_inputs = tokenizer(
-                            chunk,
+                            tokenizer.decode(chunk[0]),  # decode tokenized IDs back to string
                             padding="max_length",
                             truncation=True,
                             return_tensors="pt",
