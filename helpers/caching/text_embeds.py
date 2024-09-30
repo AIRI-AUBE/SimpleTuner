@@ -12,6 +12,7 @@ from helpers.training.multi_process import rank_info
 from queue import Queue
 import queue
 import random
+import re
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
 from helpers.training.multi_process import _get_rank as get_rank, should_log
@@ -385,9 +386,32 @@ class TextEmbeddingCache:
         try:
             # Split the prompt by commas and shuffle the parts
             if isinstance(prompt, str):
-                prompt_parts = prompt.split(',')
+                # Use regex to split by commas and periods
+                prompt_parts = re.split(r'[,.]', prompt)
+                prompt_parts = [part.strip() for part in prompt_parts if part.strip()]
                 random.shuffle(prompt_parts)
-                prompt = ','.join(prompt_parts).strip()
+                
+                # Join back together, you can choose the joining character based on your requirement
+                prompt = ', '.join(prompt_parts) + '.' 
+
+                if isinstance(prompt, str):
+                    # Split the prompt into lines first
+                    lines = prompt.split('\n')
+                    shuffled_lines = []
+
+                    for line in lines:
+                        # Split each line by commas and periods
+                        line_parts = re.split(r'[,.]', line)
+                        line_parts = [part.strip() for part in line_parts if part.strip()]
+                        random.shuffle(line_parts)
+
+                        # Reassemble the shuffled parts for the line
+                        shuffled_line = ', '.join(line_parts) + '.'
+                        shuffled_lines.append(shuffled_line)
+
+                    # Join all the shuffled lines back together
+                prompt = '\n'.join(shuffled_lines)
+
             for tokenizer, text_encoder in zip(tokenizers, text_encoders):
                 if tokenizer is None or text_encoder is None:
                     # SDXL Refiner only has one text encoder and tokenizer
@@ -417,11 +441,11 @@ class TextEmbeddingCache:
                     removed_text = tokenizer.batch_decode(
                         untruncated_ids[:, tokenizer.model_max_length - 1 : -1]
                     )
+                    final_caption = tokenizer.batch_decode(text_inputs.input_ids)
                     if not emitted_warning:
-                        # Only print this once. It's a bit spammy otherwise.
                         emitted_warning = True
                         logger.warning(
-                            f"The following part of your input was truncated because CLIP can only handle sequences up to {tokenizer.model_max_length} tokens: {removed_text}"
+                            f"The following part of your input was truncated because CLIP can only handle sequences up to {tokenizer.model_max_length} tokens: {removed_text}. Final caption: {final_caption}"
                         )
                 if self.model_type == "sdxl":
                     prompt_embeds_output = text_encoder(
