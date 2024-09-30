@@ -407,32 +407,30 @@ class TextEmbeddingCache:
                 # Handle cases where the prompt exceeds the token limit
                 if total_tokens > max_seq_len:
                     print(f"Prompt exceeds {max_seq_len} tokens. Total tokens: {total_tokens}. Splitting into chunks.")
-                    # Split tokenized input into chunks of size `max_seq_len`
+                    # Directly split the tokenized input (untruncated_ids) into chunks
                     prompt_chunks = torch.split(untruncated_ids, max_seq_len, dim=-1)
                     chunk_embeds = []
                     # Process each chunk separately
                     for chunk in prompt_chunks:
-                        chunk_inputs = tokenizer(
-                            tokenizer.decode(chunk[0]),  # decode tokenized IDs back to string
-                            padding="max_length",
-                            truncation=True,
-                            return_tensors="pt",
-                            max_length=max_seq_len,
-                        )
                         
+                        # Directly use the chunk without decoding and re-tokenizing
+                        chunk_inputs = {
+                            "input_ids": chunk.to(self.accelerator.device),
+                            "attention_mask": torch.ones_like(chunk, device=self.accelerator.device)  # assuming attention mask is 1s
+                        }
                         # Encode the chunk
                         if self.model_type == "sdxl":
                             prompt_embeds_output = text_encoder(
-                                chunk_inputs.input_ids.to(self.accelerator.device),
+                                chunk_inputs["input_ids"],
                                 output_hidden_states=True,
                             )
                             pooled_prompt_embeds = prompt_embeds_output[0]
                             prompt_embeds = prompt_embeds_output.hidden_states[-2]
                         elif self.model_type == "kolors":
                             prompt_embeds_output = text_encoder(
-                                input_ids=chunk_inputs["input_ids"].to(self.accelerator.device),
-                                attention_mask=chunk_inputs["attention_mask"].to(self.accelerator.device),
-                                position_ids=chunk_inputs["position_ids"],
+                                input_ids=chunk_inputs["input_ids"],
+                                attention_mask=chunk_inputs["attention_mask"],
+                                position_ids=torch.arange(chunk.shape[1], device=self.accelerator.device).unsqueeze(0),  # generate position_ids if necessary
                                 output_hidden_states=True,
                             )
                             prompt_embeds = prompt_embeds_output.hidden_states[-2].permute(1, 0, 2).clone()
@@ -440,16 +438,16 @@ class TextEmbeddingCache:
                         else:
                             raise ValueError(f"Unknown model type: {self.model_type}")
 
-                        bs_embed, seq_len, _ = prompt_embeds.shape
-                        prompt_embeds = prompt_embeds.view(bs_embed, seq_len, -1)
                         
                         # Add chunk embeddings to the list
                         chunk_embeds.append(prompt_embeds)
 
-                    # Concatenate all chunk embeddings
-                    prompt_embeds = torch.cat(chunk_embeds, dim=1)
-                    print(f"Concatenation successful: {len(prompt_chunks)} chunks created and concatenated.")
-                    ### MODIFICATION END
+                    # Concatenate all chunk embeddings if available
+                    if len(chunk_embeds) > 0:
+                        prompt_embeds = torch.cat(chunk_embeds, dim=1)
+                        print(f"Final concatenated embeddings shape: {prompt_embeds.shape}")  # Debugging output for final shape
+                    else:
+                        raise ValueError("No valid chunk embeddings were found, check the tokenization or chunking process.")
 
                 else:
                     # If the prompt is within token limit, process normally
