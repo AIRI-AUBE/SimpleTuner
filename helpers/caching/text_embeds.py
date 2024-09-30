@@ -395,22 +395,24 @@ class TextEmbeddingCache:
                 prompt = ', '.join(prompt_parts) + '.' 
 
                 if isinstance(prompt, str):
-                    # Split the prompt into lines first
+                    # Split the prompt into lines
                     lines = prompt.split('\n')
-                    shuffled_lines = []
+                    
+                    # Pick a random line
+                    selected_line = random.choice(lines).strip()
+                    
+                    # Split the selected line by commas and periods
+                    line_parts = re.split(r'[,.]', selected_line)
+                    line_parts = [part.strip() for part in line_parts if part.strip()]
+                    
+                    # Shuffle the parts of the selected line
+                    random.shuffle(line_parts)
+                    
+                    # Reassemble the shuffled parts for the line
+                    shuffled_line = ', '.join(line_parts) + '.'
 
-                    for line in lines:
-                        # Split each line by commas and periods
-                        line_parts = re.split(r'[,.]', line)
-                        line_parts = [part.strip() for part in line_parts if part.strip()]
-                        random.shuffle(line_parts)
-
-                        # Reassemble the shuffled parts for the line
-                        shuffled_line = ', '.join(line_parts) + '.'
-                        shuffled_lines.append(shuffled_line)
-
-                    # Join all the shuffled lines back together
-                prompt = '\n'.join(shuffled_lines)
+                    # Use the shuffled line as the new prompt
+                    prompt = shuffled_line
 
             for tokenizer, text_encoder in zip(tokenizers, text_encoders):
                 if tokenizer is None or text_encoder is None:
