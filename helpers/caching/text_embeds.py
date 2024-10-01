@@ -386,33 +386,24 @@ class TextEmbeddingCache:
         try:
             # Split the prompt by commas and shuffle the parts
             if isinstance(prompt, str):
-                # Use regex to split by commas and periods
-                prompt_parts = re.split(r'[,.]', prompt)
-                prompt_parts = [part.strip() for part in prompt_parts if part.strip()]
-                random.shuffle(prompt_parts)
+                # Split the prompt into lines
+                lines = prompt.split('\n')
                 
-                # Join back together, you can choose the joining character based on your requirement
-                prompt = ', '.join(prompt_parts) + '.' 
+                # Pick a random line
+                selected_line = random.choice(lines).strip()
+                
+                # Split the selected line by commas and periods
+                line_parts = re.split(r'[,.]', selected_line)
+                line_parts = [part.strip() for part in line_parts if part.strip()]
+                
+                # Shuffle the parts of the selected line
+                random.shuffle(line_parts)
+                
+                # Reassemble the shuffled parts for the line
+                shuffled_line = ', '.join(line_parts) + '.'
 
-                if isinstance(prompt, str):
-                    # Split the prompt into lines
-                    lines = prompt.split('\n')
-                    
-                    # Pick a random line
-                    selected_line = random.choice(lines).strip()
-                    
-                    # Split the selected line by commas and periods
-                    line_parts = re.split(r'[,.]', selected_line)
-                    line_parts = [part.strip() for part in line_parts if part.strip()]
-                    
-                    # Shuffle the parts of the selected line
-                    random.shuffle(line_parts)
-                    
-                    # Reassemble the shuffled parts for the line
-                    shuffled_line = ', '.join(line_parts) + '.'
-
-                    # Use the shuffled line as the new prompt
-                    prompt = shuffled_line
+                # Use the shuffled line as the new prompt
+                prompt = shuffled_line
 
             for tokenizer, text_encoder in zip(tokenizers, text_encoders):
                 if tokenizer is None or text_encoder is None:
