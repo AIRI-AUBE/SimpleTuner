@@ -64,6 +64,7 @@ fi
 if [ -z "${CONFIG_BACKEND}" ]; then
     if [ -n "${CONFIG_TYPE}" ]; then
         export CONFIG_BACKEND="${CONFIG_TYPE}"
+	echo "CONFIG_BACKEND=${CONFIG_TYPE}"
     fi
 fi
 
@@ -72,6 +73,7 @@ if [ -z "${CONFIG_BACKEND}" ]; then
     export CONFIG_PATH="config/${ENV_PATH}config"
     if [ -f "${CONFIG_PATH}.json" ]; then
         export CONFIG_BACKEND="json"
+	echo "!!!!found ${CONFIG_PATH}.json, setting CONFIG_BACKEND=json"
     elif [ -f "${CONFIG_PATH}.toml" ]; then
         export CONFIG_BACKEND="toml"
     elif [ -f "${CONFIG_PATH}.env" ]; then
@@ -79,6 +81,8 @@ if [ -z "${CONFIG_BACKEND}" ]; then
     fi
     echo "Using ${CONFIG_BACKEND} backend: ${CONFIG_PATH}.${CONFIG_BACKEND}"
 fi
+
+export DISABLE_UPDATES=1
 
 # Update dependencies
 if [ -z "${DISABLE_UPDATES}" ]; then
@@ -89,6 +93,10 @@ if [ -z "${DISABLE_UPDATES}" ]; then
         rocm-smi 2> /dev/null && poetry install -C install/rocm
     fi
 fi
+
+export CONFIG_BACKEND="json"
+export CONFIG_PATH="config/config.json"
+
 # Run the training script.
 if [[ -z "${ACCELERATE_CONFIG_PATH}" ]]; then
     ACCELERATE_CONFIG_PATH="${HOME}/.cache/huggingface/accelerate/default_config.yaml"
