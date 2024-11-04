@@ -171,7 +171,7 @@ def get_argument_parser():
     parser.add_argument(
         "--flux_schedule_shift",
         type=float,
-        default=None,
+        default=3,
         help=(
             "Shift the noise schedule. This is a value between 0 and ~4.0, where 0 disables the timestep-dependent shift,"
             " and anything greater than 0 will shift the timestep sampling accordingly. The SD3 model was trained with"
@@ -263,24 +263,25 @@ def get_argument_parser():
     parser.add_argument(
         "--flow_matching_loss",
         type=str,
-        choices=["diffusers", "compatible", "diffusion"],
+        choices=["diffusers", "compatible", "diffusion", "sd35"],
         default="compatible",
         help=(
             "A discrepancy exists between the Diffusers implementation of flow matching and the minimal implementation provided"
             " by StabilityAI. This experimental option allows switching loss calculations to be compatible with those."
             " Additionally, 'diffusion' is offered as an option to reparameterise a model to v_prediction loss."
+            " sd35 provides the ability to train on SD3.5's flow-matching target, which is the denoised sample."
         ),
     )
     parser.add_argument(
         "--sd3_clip_uncond_behaviour",
         type=str,
         choices=["empty_string", "zero"],
-        default='empty_string',
+        default="empty_string",
         help=(
             "SD3 can be trained using zeroed prompt embeds during unconditional dropout,"
             " or an encoded empty string may be used instead (the default). Changing this value may stabilise or"
             " destabilise training. The default is 'empty_string'."
-        )
+        ),
     )
     parser.add_argument(
         "--sd3_t5_uncond_behaviour",
@@ -290,22 +291,6 @@ def get_argument_parser():
         help=(
             "Override the value of unconditional prompts from T5 embeds."
             " The default is to follow the value of --sd3_clip_uncond_behaviour."
-        )
-    )
-    parser.add_argument(
-        "--sd3_t5_mask_behaviour",
-        type=str,
-        choices=["do-nothing", "mask"],
-        default="mask",
-        help=(
-            "StabilityAI did not correctly implement their attention masking on T5 inputs for SD3 Medium."
-            " This option enables you to switch between their broken implementation or the corrected mask"
-            " implementation. Although, the corrected masking is still applied via hackish workaround,"
-            " manually applying the mask to the prompt embeds so that the padded positions are zero."
-            " This improves the results for short captions, but does not change the behaviour for long captions."
-            " It is important to note that this limitation currently prevents expansion of SD3 Medium's"
-            " prompt length, as it will unnecessarily attend to every token in the prompt embed,"
-            " even masked positions."
         ),
     )
     parser.add_argument(
@@ -2094,7 +2079,7 @@ def parse_cmdline_args(input_args=None):
 
     if (
         args.pretrained_vae_model_name_or_path is not None
-        and args.model_family in ["legacy", "flux"]
+        and args.model_family in ["legacy", "flux", "sd3"]
         and "sdxl" in args.pretrained_vae_model_name_or_path
         and "deepfloyd" not in args.model_type
     ):
@@ -2121,7 +2106,10 @@ def parse_cmdline_args(input_args=None):
         args.aspect_bucket_alignment = 64
         if args.sd3_t5_uncond_behaviour is None:
             args.sd3_t5_uncond_behaviour = args.sd3_clip_uncond_behaviour
-        info_log(f"SD3 embeds for unconditional captions: t5={args.sd3_t5_uncond_behaviour}, clip={args.sd3_clip_uncond_behaviour}")
+        info_log(
+            f"SD3 embeds for unconditional captions: t5={args.sd3_t5_uncond_behaviour}, clip={args.sd3_clip_uncond_behaviour}"
+        )
+
     elif "deepfloyd" in args.model_type:
         deepfloyd_pixel_alignment = 8
         if args.aspect_bucket_alignment != deepfloyd_pixel_alignment:
@@ -2378,7 +2366,7 @@ def parse_cmdline_args(input_args=None):
         if args.use_dora:
             if "quanto" in args.base_model_precision:
                 logger.error(
-                    "Quanto does not yet support DoRA training in PEFT. Disabling DoRA. 😴"
+                    "Quanto does not yet support DoRA training in PEFT. Disabling DoRA. ??"
                 )
                 args.use_dora = False
             else:
