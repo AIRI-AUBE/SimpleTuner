@@ -7,9 +7,7 @@ import logging
 import torch
 from typing import Any
 from regex import regex
-import fcntl
-import tempfile
-import shutil
+from helpers.training.multi_process import _get_rank
 
 logger = logging.getLogger("LocalDataBackend")
 logger.setLevel(os.environ.get("SIMPLETUNER_LOG_LEVEL", "INFO"))
@@ -24,50 +22,30 @@ class LocalDataBackend(BaseDataBackend):
 
     def read(self, filepath, as_byteIO: bool = False):
         """Read and return the content of the file."""
+        # Openfilepath as BytesIO:
         with open(filepath, "rb") as file:
-            # Acquire a shared lock
-            fcntl.flock(file, fcntl.LOCK_SH)
-            try:
-                data = file.read()
-                if not as_byteIO:
-                    return data
-                return BytesIO(data)
-            finally:
-                # Release the lock
-                fcntl.flock(file, fcntl.LOCK_UN)
+            data = file.read()
+        if not as_byteIO:
+            return data
+        return BytesIO(data)
 
     def write(self, filepath: str, data: Any) -> None:
         """Write the provided data to the specified filepath."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        temp_dir = os.path.dirname(filepath)
-        temp_file_path = os.path.join(temp_dir, f".{os.path.basename(filepath)}.tmp")
 
-        # Open the temporary file for writing
-        with open(temp_file_path, "wb") as temp_file:
-            # Acquire an exclusive lock on the temporary file
-            fcntl.flock(temp_file, fcntl.LOCK_EX)
-            try:
-                # Write data to the temporary file
-                if isinstance(data, torch.Tensor):
-                    # Use the torch_save method, passing the temp file
-                    self.torch_save(data, temp_file)
-                    return  # torch_save handles closing the file
-                elif isinstance(data, str):
-                    data = data.encode("utf-8")
-                else:
-                    logger.debug(
-                        f"Received an unknown data type to write to disk. Doing our best: {type(data)}"
-                    )
-                temp_file.write(data)
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-            finally:
-                # Release the lock
-                fcntl.flock(temp_file, fcntl.LOCK_UN)
-
-        # Atomically replace the target file with the temporary file
-        os.rename(temp_file_path, filepath)
-
+        with open(filepath, "wb") as file:
+            # Check if data is a Tensor, and if so, save it appropriately
+            if isinstance(data, torch.Tensor):
+                # logger.debug(f"Writing a torch file to disk.")
+                return self.torch_save(data, file)
+            elif isinstance(data, str):
+                # logger.debug(f"Writing a string to disk as {filepath}: {data}")
+                data = data.encode("utf-8")
+            else:
+                logger.debug(
+                    f"Received an unknown data type to write to disk. Doing our best: {type(data)}"
+                )
+            file.write(data)
 
     def delete(self, filepath):
         """Delete the specified file."""
@@ -236,43 +214,16 @@ class LocalDataBackend(BaseDataBackend):
         Save a torch tensor to a file.
         """
         if isinstance(original_location, str):
-            filepath = original_location
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            temp_dir = os.path.dirname(filepath)
-            temp_file_path = os.path.join(temp_dir, f".{os.path.basename(filepath)}.tmp")
-
-            with open(temp_file_path, "wb") as temp_file:
-                # Acquire an exclusive lock on the temporary file
-                fcntl.flock(temp_file, fcntl.LOCK_EX)
-                try:
-                    if self.compress_cache:
-                        compressed_data = self._compress_torch(data)
-                        temp_file.write(compressed_data)
-                    else:
-                        torch.save(data, temp_file)
-                    temp_file.flush()
-                    os.fsync(temp_file.fileno())
-                finally:
-                    # Release the lock
-                    fcntl.flock(temp_file, fcntl.LOCK_UN)
-            # Atomically replace the target file with the temporary file
-            os.rename(temp_file_path, filepath)
+            location = self.open_file(original_location, "wb")
         else:
-            # Handle the case where original_location is a file object
-            temp_file = original_location
-            # Acquire an exclusive lock on the file object
-            fcntl.flock(temp_file, fcntl.LOCK_EX)
-            try:
-                if self.compress_cache:
-                    compressed_data = self._compress_torch(data)
-                    temp_file.write(compressed_data)
-                else:
-                    torch.save(data, temp_file)
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-            finally:
-                # Release the lock
-                fcntl.flock(temp_file, fcntl.LOCK_UN)
+            location = original_location
+
+        if self.compress_cache:
+            compressed_data = self._compress_torch(data)
+            location.write(compressed_data)
+        else:
+            torch.save(data, location)
+        location.close()
 
     def write_batch(self, filepaths: list, data_list: list) -> None:
         """Write a batch of data to the specified filepaths."""
