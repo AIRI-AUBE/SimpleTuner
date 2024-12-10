@@ -10,7 +10,7 @@ def load_transformer_as_unet(transformer_path, dtype):
     Load the transformer model (SD3.5's equivalent of UNet) from sharded safetensors.
     """
     # Load the entire transformer model from safetensors, explicitly setting the device to "cpu"
-    transformer = load_file(transformer_path, device="cpu")  # Force loading to CPU
+    transformer = load_file(transformer_path, device="cuda")  # Force loading to CPU
     
     # Convert the model to the desired dtype (e.g., fp32, fp16, bf16)
     return {k: v.to(dtype) for k, v in transformer.items()}
