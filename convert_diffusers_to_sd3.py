@@ -16,10 +16,13 @@ def load_transformer_as_unet(root_folder, dtype):
         torch_dtype=dtype
     )
     
-    # Extract the transformer (or unet equivalent in SD3.5)
-    transformer = pipeline.unet.state_dict()  # Use pipeline.unet.state_dict() for SD3.5
+    # Check the available attributes in the pipeline to see if we can access the transformer
+    print(f"Pipeline components: {pipeline.__dict__.keys()}")
     
-    # Move the model to the correct device (CPU or GPU)
+    # If the transformer is in a different attribute, we need to access it correctly
+    transformer = pipeline.transformer.state_dict()  # Adjust this line to use the correct attribute
+    
+    # Move the model to the correct device (GPU or CPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     transformer = {k: v.to(device) for k, v in transformer.items()}
     
