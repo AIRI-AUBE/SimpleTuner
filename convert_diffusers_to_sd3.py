@@ -3,7 +3,7 @@ import os
 import torch
 from diffusers import AutoencoderKL, StableDiffusionPipeline
 from transformers import CLIPTextModel, CLIPTokenizer
-from safetensors.torch import load_file, save_file
+from safetensors.torch import load_file, save_file, safe_open
 
 def load_transformer_as_unet(transformer_path, dtype):
     """
@@ -11,9 +11,13 @@ def load_transformer_as_unet(transformer_path, dtype):
     """
     index_file = os.path.join(transformer_path, "diffusion_pytorch_model.safetensors.index.json")
     if os.path.exists(index_file):
-        transformer = load_file(index_file)
+        # Use safe_open to handle the entire sharded model
+        with safe_open(index_file, framework="pt", device="cpu") as f:
+            transformer = f.load()
     else:
         raise FileNotFoundError(f"Transformer index file not found: {index_file}")
+    
+    # Convert to the desired dtype
     return {k: v.to(dtype) for k, v in transformer.items()}
 
 def convert_diffusers_to_sd3(diffusers_model_path, sd3_checkpoint_path, dtype=torch.float32):
