@@ -3,15 +3,14 @@ import os
 import torch
 from diffusers import AutoencoderKL, StableDiffusionPipeline
 from transformers import CLIPTextModel, CLIPTokenizer
-from safetensors.torch import load_file, save_file, safe_open
+from safetensors.torch import load_file, save_file
 
 def load_transformer_as_unet(transformer_path, dtype):
     """
     Load the transformer model (SD3.5's equivalent of UNet) from sharded safetensors.
     """
-    # Load the entire transformer directory using safe_open with framework="safetensors"
-    with safe_open(transformer_path, framework="safetensors") as f:  # Use safetensors instead of pt
-        transformer = f.load()
+    # Load the entire transformer model from safetensors sharded files
+    transformer = load_file(transformer_path)  # This handles sharded .safetensors files automatically
     
     # Convert the model to the desired dtype (e.g., fp32, fp16, bf16)
     return {k: v.to(dtype) for k, v in transformer.items()}
