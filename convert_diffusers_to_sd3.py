@@ -1,8 +1,10 @@
 import argparse
 import os
 import torch
-import safetensors
+# import safetensors
 # from safetensors.torch import save_file, load_file
+from safetensors import torch as safetensors
+
 
 
 def reverse_scale_shift(weight, dim):
@@ -17,7 +19,7 @@ def convert_diffusers_to_sd3(diffusers_model_path, sd3_checkpoint_path, dtype=to
         # Load the sharded safetensors model
         index_file = os.path.join(diffusers_model_path, "transformer/diffusion_pytorch_model.safetensors.index.json")
         if os.path.exists(index_file):
-            transformer = safetensors.torch.load_file(index_file)
+            transformer = safetensors.load_file(index_file)
         else:
             raise FileNotFoundError(f"Index file not found: {index_file}")
     else:
@@ -66,7 +68,7 @@ def convert_diffusers_to_sd3(diffusers_model_path, sd3_checkpoint_path, dtype=to
         converted_state_dict.update(vae)
 
     # Save to SD3 checkpoint
-    safetensors.torch.save_file(converted_state_dict, sd3_checkpoint_path, metadata={"format": "Stable Diffusion 3"})
+    safetensors.save_file(converted_state_dict, sd3_checkpoint_path, metadata={"format": "Stable Diffusion 3"})
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Diffusers SD3 model to SD3 checkpoint.")
