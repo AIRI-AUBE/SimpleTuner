@@ -4,7 +4,7 @@ import torch
 # import safetensors
 # from safetensors.torch import save_file, load_file
 from safetensors import torch as safetensors
-
+from diffusers import StableDiffusionPipeline
 
 
 def reverse_scale_shift(weight, dim):
@@ -17,11 +17,11 @@ def convert_diffusers_to_sd3(diffusers_model_path, sd3_checkpoint_path, dtype=to
     transformer_path = os.path.join(diffusers_model_path, "transformer/diffusion_pytorch_model.safetensors.index.json")
     if os.path.exists(transformer_path):
         # Load the sharded safetensors model
-        index_file = os.path.join(diffusers_model_path, "transformer/diffusion_pytorch_model.safetensors.index.json")
-        if os.path.exists(index_file):
-            transformer = safetensors.load_file(index_file)
-        else:
-            raise FileNotFoundError(f"Index file not found: {index_file}")
+        pipeline = StableDiffusionPipeline.from_pretrained(
+            diffusers_model_path,
+            torch_dtype=dtype,  # Ensure it matches the specified dtype (fp16, bf16, etc.)
+        )
+        transformer = pipeline.unet.state_dict()
     else:
         raise FileNotFoundError(f"Transformer model files not found in {os.path.join(diffusers_model_path, 'transformer')}")
 
