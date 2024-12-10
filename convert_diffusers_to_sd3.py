@@ -1,82 +1,72 @@
 import argparse
 import os
 import torch
-# import safetensors
-# from safetensors.torch import save_file, load_file
-from safetensors import torch as safetensors
-from diffusers import StableDiffusionPipeline
+from diffusers import AutoencoderKL, StableDiffusionPipeline
+from transformers import CLIPTextModel, CLIPTokenizer
+from safetensors.torch import load_file, save_file
 
-
-def reverse_scale_shift(weight, dim):
-    scale, shift = weight.chunk(2, dim=0)
-    return torch.cat([shift, scale], dim=0)
+def load_transformer_as_unet(transformer_path, dtype):
+    """
+    Load the transformer model (SD3.5's equivalent of UNet) from sharded safetensors.
+    """
+    index_file = os.path.join(transformer_path, "diffusion_pytorch_model.safetensors.index.json")
+    if os.path.exists(index_file):
+        transformer = load_file(index_file, framework="pt", device="cpu")
+    else:
+        raise FileNotFoundError(f"Transformer index file not found: {index_file}")
+    return {k: v.to(dtype) for k, v in transformer.items()}
 
 def convert_diffusers_to_sd3(diffusers_model_path, sd3_checkpoint_path, dtype=torch.float32):
-    # Load Diffusers Transformer Model
+    """
+    Convert a Diffusers model in SD3.5 format into a Stable Diffusion checkpoint.
+    """
+    # Load transformer (equivalent to UNet)
+    transformer_path = os.path.join(diffusers_model_path, "transformer")
+    transformer = load_transformer_as_unet(transformer_path, dtype)
 
-    transformer_path = os.path.join(diffusers_model_path, "transformer/diffusion_pytorch_model.safetensors.index.json")
-    if os.path.exists(transformer_path):
-        # Load the sharded safetensors model
-        pipeline = StableDiffusionPipeline.from_pretrained(
-            diffusers_model_path,
-            torch_dtype=dtype,  # Ensure it matches the specified dtype (fp16, bf16, etc.)
-        )
-        transformer = pipeline.unet.state_dict()
-    else:
-        raise FileNotFoundError(f"Transformer model files not found in {os.path.join(diffusers_model_path, 'transformer')}")
+    # Load VAE
+    vae_path = os.path.join(diffusers_model_path, "vae")
+    vae = AutoencoderKL.from_pretrained(vae_path)
 
-    converted_state_dict = {}
+    # Load text encoder and tokenizer
+    text_encoder_path = os.path.join(diffusers_model_path, "text_encoder")
+    text_encoder = CLIPTextModel.from_pretrained(text_encoder_path)
 
-    # Revert position embedding weights
-    converted_state_dict["pos_embed"] = transformer["pos_embed.pos_embed"]
-    converted_state_dict["x_embedder.proj.weight"] = transformer["pos_embed.proj.weight"]
-    converted_state_dict["x_embedder.proj.bias"] = transformer["pos_embed.proj.bias"]
+    tokenizer_path = os.path.join(diffusers_model_path, "tokenizer")
+    tokenizer = CLIPTokenizer.from_pretrained(tokenizer_path)
 
-    # Revert context projection weights
-    converted_state_dict["context_embedder.weight"] = transformer["context_embedder.weight"]
-    converted_state_dict["context_embedder.bias"] = transformer["context_embedder.bias"]
+    # Create a manual pipeline
+    pipeline = StableDiffusionPipeline(
+        unet=None,  # Placeholder, we replace unet with the transformer below
+        vae=vae,
+        text_encoder=text_encoder,
+        tokenizer=tokenizer,
+    )
+    pipeline.unet = transformer  # Set the transformer as unet
 
-    # Revert timestep embeddings
-    converted_state_dict["t_embedder.mlp.0.weight"] = transformer["time_text_embed.timestep_embedder.linear_1.weight"]
-    converted_state_dict["t_embedder.mlp.0.bias"] = transformer["time_text_embed.timestep_embedder.linear_1.bias"]
-    converted_state_dict["t_embedder.mlp.2.weight"] = transformer["time_text_embed.timestep_embedder.linear_2.weight"]
-    converted_state_dict["t_embedder.mlp.2.bias"] = transformer["time_text_embed.timestep_embedder.linear_2.bias"]
+    # Prepare state_dict for saving
+    state_dict = {
+        **{f"model.diffusion_model.{k}": v for k, v in transformer.items()},
+        **{f"first_stage_model.{k}": v for k, v in vae.state_dict().items()},
+        **{f"cond_stage_model.transformer.{k}": v for k, v in text_encoder.state_dict().items()},
+    }
 
-    # Revert pooled context projection
-    converted_state_dict["y_embedder.mlp.0.weight"] = transformer["time_text_embed.text_embedder.linear_1.weight"]
-    converted_state_dict["y_embedder.mlp.0.bias"] = transformer["time_text_embed.text_embedder.linear_1.bias"]
-    converted_state_dict["y_embedder.mlp.2.weight"] = transformer["time_text_embed.text_embedder.linear_2.weight"]
-    converted_state_dict["y_embedder.mlp.2.bias"] = transformer["time_text_embed.text_embedder.linear_2.bias"]
+    if dtype in [torch.float16, torch.bfloat16]:
+        state_dict = {k: v.half() for k, v in state_dict.items()}
 
-    # Revert Transformer blocks
-    for key in transformer.keys():
-        if "transformer_blocks" in key:
-            new_key = key.replace("transformer_blocks", "joint_blocks").replace(
-                ".attn.", ".x_block.attn.").replace(".attn2.", ".x_block.attn2.")
-            converted_state_dict[new_key] = transformer[key]
+    # Save as safetensors
+    save_file(state_dict, sd3_checkpoint_path)
 
-    # Handle qk norm
-    for i in range(16):  # Assuming 16 layers
-        if f"transformer_blocks.{i}.attn.norm_q.weight" in transformer:
-            converted_state_dict[f"joint_blocks.{i}.x_block.attn.ln_q.weight"] = transformer[f"transformer_blocks.{i}.attn.norm_q.weight"]
-            converted_state_dict[f"joint_blocks.{i}.x_block.attn.ln_k.weight"] = transformer[f"transformer_blocks.{i}.attn.norm_k.weight"]
-
-    # Handle VAE if present
-    vae_path = os.path.join(diffusers_model_path, "vae/pytorch_model.bin")
-    if os.path.exists(vae_path):
-        vae = torch.load(vae_path)
-        converted_state_dict.update(vae)
-
-    # Save to SD3 checkpoint
-    safetensors.save_file(converted_state_dict, sd3_checkpoint_path, metadata={"format": "Stable Diffusion 3"})
+    print(f"SD3.5 model successfully saved to {sd3_checkpoint_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Convert Diffusers SD3 model to SD3 checkpoint.")
+    parser = argparse.ArgumentParser(description="Convert Diffusers SD3.5 model to SD3 checkpoint.")
     parser.add_argument("--diffusers_model_path", type=str, required=True, help="Path to the Diffusers model directory.")
     parser.add_argument("--sd3_checkpoint_path", type=str, required=True, help="Path to save the SD3 checkpoint.")
     parser.add_argument("--dtype", type=str, default="fp32", help="Precision type: fp16, bf16, fp32 (default: fp32).")
 
     args = parser.parse_args()
 
+    # Map dtype string to torch dtype
     dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}[args.dtype]
     convert_diffusers_to_sd3(args.diffusers_model_path, args.sd3_checkpoint_path, dtype)
