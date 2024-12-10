@@ -11,7 +11,7 @@ def load_transformer_as_unet(transformer_path, dtype):
     """
     index_file = os.path.join(transformer_path, "diffusion_pytorch_model.safetensors.index.json")
     if os.path.exists(index_file):
-        transformer = load_file(index_file, framework="pt", device="cpu")
+        transformer = load_file(index_file)
     else:
         raise FileNotFoundError(f"Transformer index file not found: {index_file}")
     return {k: v.to(dtype) for k, v in transformer.items()}
