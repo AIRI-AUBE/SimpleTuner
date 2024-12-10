@@ -5,22 +5,30 @@ from diffusers import AutoencoderKL, StableDiffusionPipeline
 from transformers import CLIPTextModel, CLIPTokenizer
 from safetensors.torch import load_file, save_file
 
-def load_transformer_as_unet(transformer_path, dtype):
+
+def load_transformer_as_unet(transformer_folder, dtype):
     """
     Load the transformer model (SD3.5's equivalent of UNet) from sharded safetensors.
     """
-    # Check if CUDA (GPU) is available and choose the device accordingly
+    # Point to the index file
+    transformer_index_file = os.path.join(transformer_folder, "diffusion_pytorch_model.safetensors.index.json")
+    
+    # Verify that the index file exists
+    if not os.path.exists(transformer_index_file):
+        raise FileNotFoundError(f"Transformer index file not found: {transformer_index_file}")
+    
+    print(f"Loading transformer from index file: {transformer_index_file}")
+    
+    # Load the model from safetensors, starting with CPU
+    transformer = load_file(transformer_index_file, device="cpu")
+    
+    # Move to the correct device (GPU or CPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")  # This will print either 'cuda' or 'cpu'
-    
-    # Load the entire transformer model from safetensors, initially on CPU
-    transformer = load_file(transformer_path, device="cpu")  # Load to CPU first
-    
-    # Move the model to the selected device (GPU or CPU)
     transformer = {k: v.to(device) for k, v in transformer.items()}
     
-    # Convert the model to the desired dtype (e.g., fp32, fp16, bf16)
+    # Convert to the desired dtype
     return {k: v.to(dtype) for k, v in transformer.items()}
+
 
 
 
