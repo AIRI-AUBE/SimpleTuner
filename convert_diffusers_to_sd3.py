@@ -9,8 +9,8 @@ def load_transformer_as_unet(transformer_path, dtype):
     """
     Load the transformer model (SD3.5's equivalent of UNet) from sharded safetensors.
     """
-    # Load the entire transformer directory
-    with safe_open(transformer_path) as f:  # Don't specify device here
+    # Load the entire transformer directory using safe_open with framework="safetensors"
+    with safe_open(transformer_path, framework="safetensors") as f:  # Use safetensors instead of pt
         transformer = f.load()
     
     # Convert the model to the desired dtype (e.g., fp32, fp16, bf16)
