@@ -1,7 +1,9 @@
 import argparse
 import os
 import torch
-from safetensors.torch import save_file, load_file
+import safetensors
+# from safetensors.torch import save_file, load_file
+
 
 def reverse_scale_shift(weight, dim):
     scale, shift = weight.chunk(2, dim=0)
@@ -64,7 +66,7 @@ def convert_diffusers_to_sd3(diffusers_model_path, sd3_checkpoint_path, dtype=to
         converted_state_dict.update(vae)
 
     # Save to SD3 checkpoint
-    save_file(converted_state_dict, sd3_checkpoint_path, metadata={"format": "Stable Diffusion 3"})
+    safetensors.torch.save_file(converted_state_dict, sd3_checkpoint_path, metadata={"format": "Stable Diffusion 3"})
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Diffusers SD3 model to SD3 checkpoint.")
