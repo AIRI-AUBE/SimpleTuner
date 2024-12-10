@@ -1,71 +1,53 @@
 import argparse
 import os
 import torch
-from diffusers import AutoencoderKL, StableDiffusionPipeline
-from transformers import CLIPTextModel, CLIPTokenizer
-from safetensors.torch import load_file, save_file
-
 from diffusers import DiffusionPipeline
+from safetensors.torch import save_file
 
-
-def load_transformer_as_unet(transformer_folder, dtype):
+def load_transformer_as_unet(root_folder, dtype):
     """
-    Load the transformer model (SD3.5's equivalent of UNet) from sharded safetensors using DiffusionPipeline.
+    Load the transformer model (SD3.5's equivalent of UNet) using DiffusionPipeline.
     """
-    print(f"Loading transformer from folder: {transformer_folder}")
+    print(f"Loading pipeline from root folder: {root_folder}")
     
-    # Load the transformer using diffusers' from_pretrained method
+    # Load the pipeline from the root folder (which contains model_index.json)
     pipeline = DiffusionPipeline.from_pretrained(
-        transformer_folder,
+        root_folder,
         torch_dtype=dtype
     )
     
-    # Extract the transformer (equivalent to UNet in SD3.5)
-    transformer = pipeline.unet.state_dict()  # Replace 'unet' with 'transformer' if that's the actual component
+    # Extract the transformer (or unet equivalent in SD3.5)
+    transformer = pipeline.unet.state_dict()  # Use pipeline.unet.state_dict() for SD3.5
     
-    # Move the model to the correct device
+    # Move the model to the correct device (CPU or GPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     transformer = {k: v.to(device) for k, v in transformer.items()}
     
     return transformer
 
-
-
 def convert_diffusers_to_sd3(diffusers_model_path, sd3_checkpoint_path, dtype=torch.float32):
     """
     Convert a Diffusers model in SD3.5 format into a Stable Diffusion checkpoint.
     """
-    # Load transformer (equivalent to UNet)
-    transformer_path = os.path.join(diffusers_model_path, "transformer")
-    transformer = load_transformer_as_unet(transformer_path, dtype)
+    # Load transformer (equivalent to UNet in SD3.5)
+    transformer = load_transformer_as_unet(diffusers_model_path, dtype)
 
     # Load VAE
     vae_path = os.path.join(diffusers_model_path, "vae")
-    vae = AutoencoderKL.from_pretrained(vae_path)
+    vae = DiffusionPipeline.from_pretrained(vae_path).vae.state_dict()
 
     # Load text encoder and tokenizer
     text_encoder_path = os.path.join(diffusers_model_path, "text_encoder")
-    text_encoder = CLIPTextModel.from_pretrained(text_encoder_path)
+    text_encoder = DiffusionPipeline.from_pretrained(text_encoder_path).text_encoder.state_dict()
 
-    tokenizer_path = os.path.join(diffusers_model_path, "tokenizer")
-    tokenizer = CLIPTokenizer.from_pretrained(tokenizer_path)
-
-    # Create a manual pipeline
-    pipeline = StableDiffusionPipeline(
-        unet=None,  # Placeholder, we replace unet with the transformer below
-        vae=vae,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
-    )
-    pipeline.unet = transformer  # Set the transformer as unet
-
-    # Prepare state_dict for saving
+    # Save the model weights as safetensors
     state_dict = {
         **{f"model.diffusion_model.{k}": v for k, v in transformer.items()},
-        **{f"first_stage_model.{k}": v for k, v in vae.state_dict().items()},
-        **{f"cond_stage_model.transformer.{k}": v for k, v in text_encoder.state_dict().items()},
+        **{f"first_stage_model.{k}": v for k, v in vae.items()},
+        **{f"cond_stage_model.transformer.{k}": v for k, v in text_encoder.items()},
     }
 
+    # Handle dtype (fp16, fp32, etc.)
     if dtype in [torch.float16, torch.bfloat16]:
         state_dict = {k: v.half() for k, v in state_dict.items()}
 
