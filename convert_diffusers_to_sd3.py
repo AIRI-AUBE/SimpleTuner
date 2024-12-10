@@ -13,11 +13,15 @@ def load_transformer_as_unet(transformer_path, dtype):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")  # This will print either 'cuda' or 'cpu'
     
-    # Load the entire transformer model from safetensors, explicitly setting the device
-    transformer = load_file(transformer_path, device=device)  # Use available device (GPU or CPU)
+    # Load the entire transformer model from safetensors, initially on CPU
+    transformer = load_file(transformer_path, device="cpu")  # Load to CPU first
+    
+    # Move the model to the selected device (GPU or CPU)
+    transformer = {k: v.to(device) for k, v in transformer.items()}
     
     # Convert the model to the desired dtype (e.g., fp32, fp16, bf16)
     return {k: v.to(dtype) for k, v in transformer.items()}
+
 
 
 def convert_diffusers_to_sd3(diffusers_model_path, sd3_checkpoint_path, dtype=torch.float32):
